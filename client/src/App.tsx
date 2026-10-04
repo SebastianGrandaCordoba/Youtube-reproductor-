@@ -110,7 +110,12 @@ export default function App() {
     } else {
       nextNode = direction === 'next' ? list.moveNext(repeat) : list.movePrevious(repeat);
     }
-    if (!nextNode) { setPlaying(false); setPosition(0); return; }
+    // moveNext/movePrevious leave the current pointer unchanged at the ends
+    // when repeat is off, so detect that case instead of reloading the same
+    // YouTube iframe (which could leave a stale/blank player surface).
+    if (!nextNode || nextNode === list.current && !repeat && (direction === 'next' ? !nextNode.next : !nextNode.prev)) {
+      setPlaying(false); setPosition(0); return;
+    }
     setPosition(0); setPlaying(true); sync();
     if (nextNode.value.previewUrl) startAudio(nextNode.value);
   }, [repeat, shuffle, startAudio, sync]);
@@ -201,7 +206,7 @@ export default function App() {
             <section className="player-card">
               <div className="player-card-top"><span><i className="playing-dot" /> {playing ? 'EN REPRODUCCIÓN' : 'AHORA EN TU FILA'}</span><span>{current?.youtubeId ? 'YOUTUBE VIDEO' : 'DEMO LOCAL'} <b>·</b> {current ? String(Math.max(1, listRef.current.indexOfId(current.id) + 1)).padStart(2, '0') : '00'} / {String(tracks.length).padStart(2, '0')}</span></div>
               <div className="media-stage">
-                {current?.youtubeId ? <YouTubeFrame key={current.youtubeId} videoId={current.youtubeId} autoplay={playing} onReady={(yt) => { yt.setVolume(volume * 100); setPlayer(yt); setYoutubeReady(true); setDuration(yt.getDuration() || 0); if (playing) yt.playVideo(); }} onDispose={() => { setPlayer(null); setYoutubeReady(false); }} onStateChange={(state, yt) => {
+                {current?.youtubeId ? <YouTubeFrame videoId={current.youtubeId} autoplay={playing} onReady={(yt) => { yt.setVolume(volume * 100); setPlayer(yt); setYoutubeReady(true); setDuration(yt.getDuration() || 0); if (playing) yt.playVideo(); }} onDispose={() => { setPlayer(null); setYoutubeReady(false); }} onStateChange={(state, yt) => {
                   if (state === 1) { setPlaying(true); setDuration(yt.getDuration() || 0); }
                   else if (state === 2) setPlaying(false);
                   else if (state === 0) { if (repeat) { yt.seekTo(0, true); yt.playVideo(); } else step('next'); }

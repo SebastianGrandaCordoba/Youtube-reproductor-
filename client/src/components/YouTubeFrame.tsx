@@ -14,6 +14,7 @@ export interface YouTubePlayer {
   getCurrentTime(): number;
   getDuration(): number;
   setVolume(volume: number): void;
+  loadVideoById(videoId: string): void;
   destroy(): void;
 }
 
@@ -48,19 +49,32 @@ function loadApi(): Promise<void> {
 export default function YouTubeFrame({ videoId, autoplay, onReady, onDispose, onStateChange, onError }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<YouTubePlayer | null>(null);
+  const readyRef = useRef(false);
+  const currentVideoIdRef = useRef(videoId);
+  const autoplayRef = useRef(autoplay);
   const callbacks = useRef({ onReady, onDispose, onStateChange, onError });
   callbacks.current = { onReady, onDispose, onStateChange, onError };
+  currentVideoIdRef.current = videoId;
+  autoplayRef.current = autoplay;
 
   useEffect(() => {
     let active = true;
     void loadApi().then(() => {
       if (!active || !hostRef.current || !window.YT?.Player) return;
       const host = hostRef.current;
+      const initialVideoId = currentVideoIdRef.current;
       const player = new window.YT.Player(host, {
-        width: '100%', height: '100%', videoId,
+        width: '100%', height: '100%', videoId: initialVideoId,
         playerVars: { autoplay: 0, controls: 1, playsinline: 1, rel: 0, enablejsapi: 1, origin: window.location.origin },
         events: {
-          onReady: (event: { target: YouTubePlayer }) => { if (!active) return; playerRef.current = event.target; callbacks.current.onReady(event.target); },
+          onReady: (event: { target: YouTubePlayer }) => {
+            if (!active) return;
+            playerRef.current = event.target;
+            readyRef.current = true;
+            if (currentVideoIdRef.current !== initialVideoId) event.target.loadVideoById(currentVideoIdRef.current);
+            else if (autoplayRef.current) event.target.playVideo();
+            callbacks.current.onReady(event.target);
+          },
           onStateChange: (event: { data: number; target: YouTubePlayer }) => callbacks.current.onStateChange(event.data, event.target),
           onError: (event: { data: number }) => callbacks.current.onError(event.data),
         },
@@ -69,12 +83,18 @@ export default function YouTubeFrame({ videoId, autoplay, onReady, onDispose, on
     }).catch(() => { if (active) callbacks.current.onError(-1); });
     return () => {
       active = false;
+      readyRef.current = false;
       try { playerRef.current?.destroy(); } catch { /* The iframe may not have finished mounting. */ }
       playerRef.current = null;
       callbacks.current.onDispose();
     };
+  }, []);
+
+  useEffect(() => {
+    if (!readyRef.current || !playerRef.current) return;
+    playerRef.current.loadVideoById(videoId);
   }, [videoId]);
 
-  useEffect(() => { if (autoplay) playerRef.current?.playVideo(); }, [autoplay]);
+  useEffect(() => { if (autoplay && readyRef.current) playerRef.current?.playVideo(); }, [autoplay]);
   return <div className="youtube-frame" ref={hostRef} aria-label="Video de YouTube" />;
 }
