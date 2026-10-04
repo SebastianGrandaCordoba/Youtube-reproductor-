@@ -6,17 +6,16 @@ Reproductor web de videos musicales con una cola construida sobre una **lista do
 
 - Búsqueda de videos públicos de YouTube mediante el backend.
 - Reproducción integrada con el reproductor oficial de YouTube (video visible).
-- Cola persistida en el navegador con agregar al inicio, al final y antes de cualquier posición.
+- Cola temporal con agregar al inicio, al final y antes de cualquier posición.
 - Adelantar, retroceder, seleccionar, reordenar, eliminar y vaciar la cola.
 - Repetición, reproducción aleatoria, barra de progreso y visualización de `prev` y `next` en cada nodo.
-- Siete pistas de demostración originales locales para probar el reproductor sin configurar YouTube.
+- La fila, la búsqueda y los resultados empiezan vacíos cada vez que se abre o recarga la aplicación.
 - Interfaz adaptable a pantallas móviles y escritorio.
 
 ## Estructura
 
 ```text
 client/                  React, TypeScript, Vite y Tailwind CSS
-  public/audio/           Pistas originales locales de demostración
   src/components/         Integración oficial del reproductor IFrame
   src/structures/         Lista doblemente enlazada genérica
   src/App.tsx             UI, controles y operaciones de la cola
@@ -44,7 +43,7 @@ Copy-Item client/.env.example client/.env.local
 pnpm dev
 ```
 
-El cliente queda en `http://localhost:5173` y la API en `http://localhost:4000`. Sin clave de YouTube se pueden escuchar las demos y probar la cola; la búsqueda pública requiere `YOUTUBE_API_KEY`.
+El cliente queda en `http://localhost:5173` y la API en `http://localhost:4000`. La búsqueda de videos públicos requiere `YOUTUBE_API_KEY`. La fila es temporal y se borra al cerrar o recargar la aplicación.
 
 ### Habilitar búsqueda de YouTube
 

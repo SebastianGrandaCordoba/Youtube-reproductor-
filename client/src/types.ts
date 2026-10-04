@@ -6,6 +6,5 @@ export interface Track {
   duration: number;
   cover: string;
   accent: string;
-  previewUrl?: string;
-  youtubeId?: string;
+  youtubeId: string;
 }

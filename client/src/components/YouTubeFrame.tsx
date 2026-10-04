@@ -100,5 +100,7 @@ export default function YouTubeFrame({ videoId, autoplay, onReady, onDispose, on
   }, [videoId]);
 
   useEffect(() => { if (autoplay && readyRef.current) playerRef.current?.playVideo(); }, [autoplay]);
-  return <div className="youtube-frame" ref={hostRef} aria-label="Video de YouTube" />;
+  // The YouTube API replaces its target element with an iframe. Keep that
+  // target inside a React-owned wrapper so unmounting the player stays safe.
+  return <div className="youtube-frame" aria-label="Video de YouTube"><div ref={hostRef} /></div>;
 }
