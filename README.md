@@ -6,9 +6,11 @@ Reproductor web de videos musicales con una cola construida sobre una **lista do
 
 - Búsqueda de videos públicos de YouTube mediante el backend.
 - Reproducción integrada con el reproductor oficial de YouTube (video visible).
-- Cola temporal con agregar al inicio, al final y antes de cualquier posición.
-- Adelantar, retroceder, seleccionar, reordenar, eliminar y vaciar la cola.
-- Repetición, reproducción aleatoria, barra de progreso y visualización de `prev` y `next` en cada nodo.
+- Cola temporal con agregar al inicio, al final y en una posición numerada específica.
+- Adelantar, retroceder, seleccionar, reordenar, eliminar y vaciar la cola. La pista terminada o saltada sale de la fila activa.
+- Historial independiente de canciones escuchadas o saltadas en la sesión, con opción para volver a reproducirlas.
+- Aleatorio sin repetir canciones hasta recorrer la fila; en orden normal, avanzar desde la última canción vuelve a la primera.
+- Repetición, barra de progreso y visualización de `prev` y `next` en cada nodo.
 - La fila, la búsqueda y los resultados empiezan vacíos cada vez que se abre o recarga la aplicación.
 - Interfaz adaptable a pantallas móviles y escritorio.
 
