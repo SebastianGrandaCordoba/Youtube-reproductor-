@@ -75,8 +75,12 @@ export default function YouTubeFrame({ videoId, autoplay, onReady, onDispose, on
             else if (autoplayRef.current) event.target.playVideo();
             callbacks.current.onReady(event.target);
           },
-          onStateChange: (event: { data: number; target: YouTubePlayer }) => callbacks.current.onStateChange(event.data, event.target),
-          onError: (event: { data: number }) => callbacks.current.onError(event.data),
+          onStateChange: (event: { data: number; target: YouTubePlayer }) => {
+            if (active) callbacks.current.onStateChange(event.data, event.target);
+          },
+          onError: (event: { data: number }) => {
+            if (active) callbacks.current.onError(event.data);
+          },
         },
       });
       playerRef.current = player;
