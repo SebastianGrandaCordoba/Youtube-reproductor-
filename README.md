@@ -6,12 +6,14 @@ Reproductor web de videos musicales con una cola construida sobre una **lista do
 
 - Búsqueda de videos públicos de YouTube mediante el backend.
 - Reproducción integrada con el reproductor oficial de YouTube (video visible).
+- Botón para agregar archivos MP3 y MP4 locales al final de la fila; se reproducen desde el dispositivo y no se suben al servidor.
 - Cola temporal con agregar al inicio, al final y en una posición numerada específica.
 - Adelantar, retroceder, seleccionar, reordenar, eliminar y vaciar la cola. La pista terminada o saltada sale de la fila activa.
 - Historial independiente de canciones escuchadas o saltadas en la sesión, con opción para volver a reproducirlas.
 - Aleatorio sin repetir canciones hasta recorrer la fila; en orden normal, avanzar desde la última canción vuelve a la primera.
 - Repetición, barra de progreso y visualización de `prev` y `next` en cada nodo.
 - La fila, la búsqueda y los resultados empiezan vacíos cada vez que se abre o recarga la aplicación.
+- Al vaciarse la fila, puede buscar una sugerencia contextual a partir del historial y agregar una sola pista para continuar. Se puede desactivar desde "Sugerencias al terminar".
 - Interfaz adaptable a pantallas móviles y escritorio.
 
 ## Estructura
@@ -57,6 +59,14 @@ El cliente queda en `http://localhost:5173` y la API en `http://localhost:4000`.
 6. En el servicio frontend define `VITE_API_URL` con la URL pública del backend, sin `/` final, y vuelve a desplegar el frontend.
 
 La búsqueda utiliza YouTube Data API v3. Google aplica cuotas al proyecto de API; revisa la consola de Google Cloud para ver la cuota vigente.
+
+## Archivos locales
+
+El botón **Archivo local** acepta MP3 y MP4 y siempre los agrega al final de la fila. Los archivos se reproducen en el navegador del dispositivo mediante sus URLs temporales; no se envían al backend y desaparecen al cerrar o recargar la aplicación. La posición de reproducción y el volumen usan los controles del reproductor.
+
+## Sugerencias al terminar
+
+Cuando ya no hay pistas pendientes, la continuación automática consulta YouTube Data API v3 con términos derivados de los artistas o títulos del historial. Filtra identificadores ya escuchados en la sesión y agrega una sola sugerencia cada vez. Es una búsqueda contextual, no un sistema de recomendaciones personalizadas de YouTube. El control **Sugerencias al terminar** permite desactivarla; al apagarla se conserva el ciclo de reproducción de la fila.
 
 ## Reproducción de YouTube
 

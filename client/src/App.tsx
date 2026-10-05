@@ -19,11 +19,15 @@ const shuffledIds = (tracks: Track[], excludedId?: string) => {
 };
 
 function Cover({ track, className = '' }: { track: Track; className?: string }) {
-  return <img className={className} src={track.cover} alt="" loading="lazy" />;
+  return track.cover ? <img className={className} src={track.cover} alt="" loading="lazy" /> : <span className={className + ' local-cover-fallback'}><AudioLines size={17} /></span>;
 }
 
 export default function App() {
   const listRef = useRef(new DoublyLinkedList<Track>());
+  const localMediaRef = useRef<HTMLMediaElement | null>(null);
+  const localFileInputRef = useRef<HTMLInputElement>(null);
+  const localObjectUrlsRef = useRef<string[]>([]);
+  const recommendationRequestRef = useRef(0);
   const shuffleBagRef = useRef<string[]>([]);
   const catalogRef = useRef<Track[]>([]);
   const historyRef = useRef<HistoryEntry[]>([]);
@@ -43,6 +47,8 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [apiConfigured, setApiConfigured] = useState(false);
   const [addPosition, setAddPosition] = useState<AddPosition>('end');
+  const [autoContinue, setAutoContinue] = useState(true);
+  const [recommendationLoading, setRecommendationLoading] = useState(false);
   const [toast, setToast] = useState('');
   const [toastError, setToastError] = useState(false);
 
@@ -61,6 +67,40 @@ export default function App() {
     setHistory(historyRef.current);
   }, []);
 
+  const requestRecommendation = useCallback(async () => {
+    if (!autoContinue || recommendationLoading || !historyRef.current.length || !listRef.current.isEmpty) return;
+    const requestId = ++recommendationRequestRef.current;
+    const recentContext = [...new Set(historyRef.current.slice(0, 5).map(({ track }) => track.artist === 'Archivo local' ? track.title : `${track.title} ${track.artist}`).filter(Boolean))];
+    const query = `music similar to ${recentContext.join(' ')}`.slice(0, 180);
+    const excludedIds = [...new Set([
+      ...historyRef.current.map(({ track }) => track.youtubeId),
+      ...catalogRef.current.map((track) => track.youtubeId),
+      ...listRef.current.toArray().map((track) => track.youtubeId),
+    ].filter((id): id is string => Boolean(id)))].slice(-100);
+    setRecommendationLoading(true);
+    try {
+      const params = new URLSearchParams({ q: query, exclude: excludedIds.join(',') });
+      const response = await fetch(`${apiBase}/api/youtube/recommendations?${params}`);
+      const data = await response.json() as { items?: SearchTrack[]; error?: string };
+      if (!response.ok) throw new Error(data.error || 'No se pudo buscar una sugerencia.');
+      if (requestId !== recommendationRequestRef.current || !autoContinue || !listRef.current.isEmpty) return;
+      const suggestion = data.items?.find((track) => track.youtubeId && !excludedIds.includes(track.youtubeId));
+      if (!suggestion) { setPlaying(false); notify('No encontré otra sugerencia insertable. Agrega una pista para continuar.', true); return; }
+      listRef.current.addLast(suggestion);
+      catalogRef.current.push(suggestion);
+      listRef.current.setCurrentById(suggestion.id);
+      setPosition(0); setDuration(0); setPlaying(true); sync();
+      notify('Sugerencia agregada según tu historial: “' + suggestion.title + '”.');
+    } catch (error) {
+      if (requestId === recommendationRequestRef.current) {
+        setPlaying(false);
+        notify(error instanceof Error ? error.message : 'No se pudo obtener una sugerencia de YouTube.', true);
+      }
+    } finally {
+      if (requestId === recommendationRequestRef.current) setRecommendationLoading(false);
+    }
+  }, [autoContinue, notify, recommendationLoading, sync]);
+
   useEffect(() => {
     // Start every browser session with a clean queue and remove data saved by older builds.
     localStorage.removeItem('waveframe-queue-v1');
@@ -71,6 +111,14 @@ export default function App() {
   }, [sync]);
 
   useEffect(() => {
+    if (autoContinue && historyRef.current.length && listRef.current.isEmpty) void requestRecommendation();
+  }, [autoContinue]);
+
+  useEffect(() => () => {
+    localObjectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+  }, []);
+
+  useEffect(() => {
     if (!player || !current?.youtubeId || !playing) return;
     const timer = window.setInterval(() => {
       setPosition(player.getCurrentTime() || 0);
@@ -79,7 +127,10 @@ export default function App() {
     return () => window.clearInterval(timer);
   }, [player, current?.youtubeId, playing]);
 
-  useEffect(() => { if (player && current?.youtubeId) player.setVolume(volume * 100); }, [player, current?.youtubeId, volume]);
+  useEffect(() => {
+    if (player && current?.youtubeId) player.setVolume(volume * 100);
+    if (localMediaRef.current && current?.localUrl) localMediaRef.current.volume = volume;
+  }, [player, current?.youtubeId, current?.localUrl, volume]);
 
   const selectTrack = useCallback((track: Track) => {
     const list = listRef.current;
@@ -118,8 +169,10 @@ export default function App() {
       shuffleBagRef.current = shuffleBagRef.current.filter((id) => availableIds.has(id));
       if (!shuffleBagRef.current.length) {
         list.clear();
-        catalogRef.current.forEach((track) => list.addLast(track));
-        shuffleBagRef.current = shuffledIds(catalogRef.current, currentTrack.id);
+        if (!autoContinue) {
+          catalogRef.current.forEach((track) => list.addLast(track));
+          shuffleBagRef.current = shuffledIds(catalogRef.current, currentTrack.id);
+        }
       }
       const nextShuffleId = shuffleBagRef.current.pop();
       if (nextShuffleId) list.setCurrentById(nextShuffleId);
@@ -129,7 +182,7 @@ export default function App() {
         // Continue through the remaining queue.
       } else if (list.head) {
         list.current = list.head;
-      } else if (catalogRef.current.length) {
+      } else if (!autoContinue && catalogRef.current.length) {
         catalogRef.current.forEach((track) => list.addLast(track));
       }
     } else if (previousQueueId && list.setCurrentById(previousQueueId)) {
@@ -141,10 +194,17 @@ export default function App() {
       list.current = list.tail;
     }
     const nextTrack = list.current?.value;
-    if (!nextTrack) { setPlaying(false); setPosition(0); setDuration(0); sync(); return; }
+    if (!nextTrack) {
+      setPlaying(false); setPosition(0); setDuration(0); sync();
+      if (direction === 'next' && autoContinue && historyRef.current.length) void requestRecommendation();
+      return;
+    }
     setPosition(0); setDuration(0); setPlaying(true); sync();
-    if (nextTrack.id === currentTrack.id) { player?.seekTo(0, true); player?.playVideo(); }
-  }, [player, recordHistory, shuffle, sync]);
+    if (nextTrack.id === currentTrack.id) {
+      if (nextTrack.localUrl && localMediaRef.current) { localMediaRef.current.currentTime = 0; void localMediaRef.current.play().catch(() => setPlaying(false)); }
+      else { player?.seekTo(0, true); player?.playVideo(); }
+    }
+  }, [autoContinue, player, recordHistory, requestRecommendation, shuffle, sync]);
 
   const toggleShuffle = () => {
     const enabling = !shuffle;
@@ -153,6 +213,8 @@ export default function App() {
   };
 
   const addTrack = useCallback((track: Track, where: AddPosition = 'end') => {
+    recommendationRequestRef.current += 1;
+    setRecommendationLoading(false);
     const list = listRef.current;
     if (list.indexOfId(track.id) >= 0) { notify('Ese video ya está en tu fila.', true); return; }
     const insertionIndex = where === 'start' ? 0 : where === 'end' ? list.size : Math.max(0, Math.min(where, list.size));
@@ -193,7 +255,10 @@ export default function App() {
     sync(); notify('Pista eliminada.');
   };
   const clearQueue = () => {
+    recommendationRequestRef.current += 1;
+    setRecommendationLoading(false);
     player?.pauseVideo();
+    localMediaRef.current?.pause();
     shuffleBagRef.current = [];
     catalogRef.current = [];
     listRef.current.clear(); setTracks([]); setCurrent(null); setPlayer(null);
@@ -213,6 +278,13 @@ export default function App() {
 
   const togglePlayback = () => {
     if (!current) return;
+    if (current.localUrl) {
+      const media = localMediaRef.current;
+      if (!media) { setPlaying(true); return; }
+      if (playing) { media.pause(); setPlaying(false); }
+      else { void media.play().then(() => setPlaying(true)).catch(() => { setPlaying(false); notify('No se pudo reproducir este archivo local.', true); }); }
+      return;
+    }
     if (!current.youtubeId) { notify('Elige un video de YouTube para reproducir.', true); return; }
     if (!player) { setPlaying(true); notify('Cargando el reproductor de YouTube…'); return; }
     if (playing) player.pauseVideo(); else player.playVideo();
@@ -220,6 +292,44 @@ export default function App() {
   const seek = (value: number) => {
     setPosition(value);
     if (current?.youtubeId) player?.seekTo(value, true);
+    else if (current?.localUrl && localMediaRef.current) localMediaRef.current.currentTime = value;
+  };
+
+  const addLocalFiles = (files: FileList | null) => {
+    if (!files?.length) return;
+    const accepted = Array.from(files).filter((file) => /\.(mp3|mp4)$/i.test(file.name));
+    const rejectedCount = files.length - accepted.length;
+    for (const [index, file] of accepted.entries()) {
+      const localKind = /\.mp4$/i.test(file.name) ? 'video' : 'audio';
+      const localUrl = URL.createObjectURL(file);
+      localObjectUrlsRef.current.push(localUrl);
+      const track: Track = {
+        id: `local-${Date.now()}-${index}-${Math.random().toString(36).slice(2)}`,
+        title: file.name.replace(/\.(mp3|mp4)$/i, ''),
+        artist: 'Archivo local',
+        album: localKind === 'audio' ? 'Audio de este dispositivo' : 'Video de este dispositivo',
+        duration: 0,
+        cover: '',
+        accent: '#b77cff',
+        localUrl,
+        localKind,
+      };
+      addTrack(track, 'end');
+    }
+    if (rejectedCount) notify('Solo se aceptan archivos MP3 y MP4.', true);
+    if (!accepted.length) return;
+    if (accepted.length > 1) notify(`${accepted.length} archivos locales se agregaron al final de la fila.`);
+  };
+
+  const updateLocalDuration = (trackId: string, seconds: number) => {
+    if (!Number.isFinite(seconds) || seconds <= 0) return;
+    const track = listRef.current.toArray().find((item) => item.id === trackId)
+      ?? catalogRef.current.find((item) => item.id === trackId);
+    if (track) track.duration = seconds;
+    const catalogTrack = catalogRef.current.find((item) => item.id === trackId);
+    if (catalogTrack) catalogTrack.duration = seconds;
+    setDuration(seconds);
+    sync();
   };
 
   const searchYouTube = async (event: FormEvent<HTMLFormElement>) => {
@@ -250,6 +360,7 @@ export default function App() {
         <div className="sidebar-label">MEZCLA</div>
         <button className={'nav-item ' + (shuffle ? 'selected' : '')} onClick={toggleShuffle}><Shuffle size={17} /><span>Aleatorio</span></button>
         <button className={'nav-item ' + (repeat ? 'selected' : '')} onClick={() => setRepeat((value) => !value)}><Activity size={17} /><span>Repetir</span></button>
+        <button className={'nav-item ' + (autoContinue ? 'selected' : '')} onClick={() => { recommendationRequestRef.current += 1; setRecommendationLoading(false); setAutoContinue((value) => !value); }}><AudioLines size={17} /><span>Sugerencias al terminar</span></button>
         <div className="sidebar-bottom"><span className="online-dot" /> Búsqueda de YouTube<small>La fila se reinicia al abrir</small></div>
       </aside>
 
@@ -263,16 +374,18 @@ export default function App() {
             </div>
 
             <section className={'player-card ' + (playing ? 'is-playing' : '')}>
-              <div className="player-card-top"><span><i className="playing-dot" /> {playing ? 'EN REPRODUCCIÓN' : 'AHORA EN TU FILA'}</span><span>{current ? 'YOUTUBE VIDEO' : 'SIN CANCIÓN'} <b>·</b> {current ? String(Math.max(1, listRef.current.indexOfId(current.id) + 1)).padStart(2, '0') : '00'} / {String(tracks.length).padStart(2, '0')}</span></div>
+              <div className="player-card-top"><span><i className="playing-dot" /> {playing ? 'EN REPRODUCCIÓN' : 'AHORA EN TU FILA'}</span><span>{current?.localUrl ? 'ARCHIVO LOCAL' : current ? 'YOUTUBE VIDEO' : 'SIN CANCIÓN'} <b>·</b> {current ? String(Math.max(1, listRef.current.indexOfId(current.id) + 1)).padStart(2, '0') : '00'} / {String(tracks.length).padStart(2, '0')}</span></div>
               <div className="media-stage">
                 {current?.youtubeId ? <YouTubeFrame videoId={current.youtubeId} autoplay={playing} onReady={(yt) => { yt.setVolume(volume * 100); setPlayer(yt); setYoutubeReady(true); setDuration(yt.getDuration() || 0); if (playing) yt.playVideo(); }} onDispose={() => { setPlayer(null); setYoutubeReady(false); }} onStateChange={(state, yt) => {
                   if (state === 1) { setPlaying(true); setDuration(yt.getDuration() || 0); }
                   else if (state === 2) setPlaying(false);
                   else if (state === 0 && yt.getVideoData?.().video_id === current.youtubeId) { if (repeat) { yt.seekTo(0, true); yt.playVideo(); } else step('next', 'finished'); }
                 }} onError={(code) => notify(code === 101 || code === 150 ? 'Ese video no permite reproducción dentro de otras páginas. Prueba otro resultado.' : 'YouTube no pudo cargar el video (' + code + ').', true)} />
-                : <div className="empty-player-stage"><Youtube size={25} /><span>Busca un video y añádelo a tu fila para empezar.</span></div>}
+                : current?.localUrl && current.localKind === 'video' ? <video className="local-video-player" key={current.id} ref={(element) => { localMediaRef.current = element; }} src={current.localUrl} playsInline controls preload="metadata" onLoadedMetadata={(event) => { if (localMediaRef.current === event.currentTarget) updateLocalDuration(current.id, event.currentTarget.duration); }} onCanPlay={(event) => { const media = event.currentTarget; if (localMediaRef.current === media && playing) void media.play().catch(() => { setPlaying(false); notify('El navegador no pudo iniciar este archivo MP4.', true); }); }} onTimeUpdate={(event) => { if (localMediaRef.current === event.currentTarget) { setPosition(event.currentTarget.currentTime); setDuration(event.currentTarget.duration || 0); } }} onPlay={(event) => { if (localMediaRef.current === event.currentTarget) setPlaying(true); }} onPause={(event) => { if (localMediaRef.current === event.currentTarget && !event.currentTarget.ended) setPlaying(false); }} onEnded={(event) => { if (localMediaRef.current !== event.currentTarget) return; if (repeat) { event.currentTarget.currentTime = 0; void event.currentTarget.play(); } else step('next', 'finished'); }} onError={() => notify('No se pudo leer este archivo MP4.', true)} />
+                : current?.localUrl ? <div className="local-audio-stage" key={current.id}><div className="local-audio-art"><AudioLines size={43} /><span>ARCHIVO MP3</span></div><audio className="local-audio-element" ref={(element) => { localMediaRef.current = element; }} src={current.localUrl} preload="metadata" onLoadedMetadata={(event) => { if (localMediaRef.current === event.currentTarget) updateLocalDuration(current.id, event.currentTarget.duration); }} onCanPlay={(event) => { const media = event.currentTarget; if (localMediaRef.current === media && playing) void media.play().catch(() => { setPlaying(false); notify('El navegador no pudo iniciar este archivo MP3.', true); }); }} onTimeUpdate={(event) => { if (localMediaRef.current === event.currentTarget) { setPosition(event.currentTarget.currentTime); setDuration(event.currentTarget.duration || 0); } }} onPlay={(event) => { if (localMediaRef.current === event.currentTarget) setPlaying(true); }} onPause={(event) => { if (localMediaRef.current === event.currentTarget && !event.currentTarget.ended) setPlaying(false); }} onEnded={(event) => { if (localMediaRef.current !== event.currentTarget) return; if (repeat) { event.currentTarget.currentTime = 0; void event.currentTarget.play(); } else step('next', 'finished'); }} onError={() => notify('No se pudo leer este archivo MP3.', true)} /><span className="local-audio-caption">El audio local se reproduce en este dispositivo</span></div>
+                : <div className="empty-player-stage">{recommendationLoading ? <LoaderCircle className="spin" size={25} /> : <Youtube size={25} />}<span>{recommendationLoading ? 'Buscando una sugerencia basada en tu historial…' : 'Busca un video o agrega un archivo local para empezar.'}</span></div>}
               </div>
-              <div className="player-info" key={current?.id ?? 'empty'}>{current ? <Cover track={current} className="current-cover" /> : <div className="current-cover current-cover-empty"><Youtube size={17} /></div>}<div className="current-copy"><span className="eyebrow">SELECCIÓN ACTUAL</span><strong>{current?.title ?? 'Nada seleccionado'}</strong><small>{current?.artist ?? 'Añade una canción desde YouTube'}</small></div><div className="player-source"><span className="online-dot" />{current ? 'VIDEO DE YOUTUBE' : 'SIN REPRODUCCIÓN'}</div></div>
+              <div className="player-info" key={current?.id ?? 'empty'}>{current ? <Cover track={current} className="current-cover" /> : <div className="current-cover current-cover-empty"><Youtube size={17} /></div>}<div className="current-copy"><span className="eyebrow">SELECCIÓN ACTUAL</span><strong>{current?.title ?? 'Nada seleccionado'}</strong><small>{current?.artist ?? 'Añade música desde YouTube o un archivo local'}</small></div><div className="player-source"><span className="online-dot" />{current?.localUrl ? current.localKind === 'video' ? 'VIDEO LOCAL' : 'AUDIO LOCAL' : current ? 'VIDEO DE YOUTUBE' : 'SIN REPRODUCCIÓN'}</div></div>
               <div className="seek-row"><span>{formatTime(position)}</span><input aria-label="Posición de reproducción" type="range" min="0" max={Math.max(duration, 1)} value={Math.min(position, duration || 0)} onChange={(event) => seek(Number(event.target.value))} /><span>{formatTime(duration || current?.duration || 0)}</span></div>
               <div className="control-row">
                 <button className={'quiet-control ' + (shuffle ? 'on' : '')} onClick={toggleShuffle} aria-label="Aleatorio"><Shuffle size={19} /></button>
@@ -281,18 +394,18 @@ export default function App() {
                 <button className="skip-control" onClick={() => step('next')} aria-label="Siguiente"><SkipForward size={21} fill="currentColor" /></button>
                 <button className={'quiet-control ' + (repeat ? 'on' : '')} onClick={() => setRepeat((value) => !value)} aria-label="Repetir"><Activity size={19} /></button>
               </div>
-              <div className="player-card-foot"><span><Youtube size={13} /> REPRODUCTOR OFICIAL INTEGRADO</span><label className="volume-control">VOL <input aria-label="Volumen" type="range" min="0" max="1" step="0.01" value={volume} onChange={(event) => setVolume(Number(event.target.value))} /></label><span>{current && !youtubeReady ? 'CARGANDO VIDEO…' : 'LISTO PARA SONAR'}</span></div>
+              <div className="player-card-foot"><span>{current?.localUrl ? <><AudioLines size={13} /> ARCHIVO DE ESTE DISPOSITIVO</> : <><Youtube size={13} /> REPRODUCTOR OFICIAL INTEGRADO</>}</span><label className="volume-control">VOL <input aria-label="Volumen" type="range" min="0" max="1" step="0.01" value={volume} onChange={(event) => setVolume(Number(event.target.value))} /></label><span>{current && current.youtubeId && !youtubeReady ? 'CARGANDO VIDEO…' : 'LISTO PARA SONAR'}</span></div>
             </section>
 
             <section className="queue-section" id="queue">
-              <div className="section-head"><div><span className="eyebrow">CONEXIONES ENTRE NODOS</span><h2>Tu fila <em>{String(tracks.length).padStart(2, '0')}</em></h2></div><div className="queue-actions"><button className="outline-button" onClick={() => { document.getElementById('youtube-search')?.focus(); window.scrollTo({ top: 0, behavior: 'smooth' }); }}><Plus size={15} /> Añadir</button><button className="text-button" onClick={clearQueue} disabled={!tracks.length}>Vaciar</button></div></div>
+              <div className="section-head"><div><span className="eyebrow">CONEXIONES ENTRE NODOS</span><h2>Tu fila <em>{String(tracks.length).padStart(2, '0')}</em></h2></div><div className="queue-actions"><input ref={localFileInputRef} className="local-file-input" type="file" accept=".mp3,.mp4,audio/mpeg,video/mp4" multiple onChange={(event) => { addLocalFiles(event.currentTarget.files); event.currentTarget.value = ''; }} /><button className="outline-button" onClick={() => localFileInputRef.current?.click()}><Plus size={15} /> Archivo local</button><button className="outline-button" onClick={() => { document.getElementById('youtube-search')?.focus(); window.scrollTo({ top: 0, behavior: 'smooth' }); }}><Plus size={15} /> YouTube</button><button className="text-button" onClick={clearQueue} disabled={!tracks.length}>Vaciar</button></div></div>
               <div className="queue-table">
                 <div className="table-head"><span># / PISTA</span><span>ORIGEN</span><span>ENLACES DEL NODO</span><span /></div>
                 {tracks.map((track, index) => {
                   const node = listRef.current.nodeAt(index);
                   return <div className={'queue-row ' + (current?.id === track.id ? 'current-row' : '')} key={track.id}>
                     <button className="track-pick" onClick={() => selectTrack(track)}><span className="track-index">{String(index + 1).padStart(2, '0')}</span><Cover track={track} className="queue-cover" /><span className="track-titles"><b>{track.title}</b><small>{track.artist}</small></span></button>
-                    <span className="source-label"><Youtube size={13} /> YouTube</span>
+                    <span className="source-label">{track.localUrl ? <><AudioLines size={13} /> Archivo local</> : <><Youtube size={13} /> YouTube</>}</span>
                     <div className="node-links"><span>{node?.prev?.value.title ?? '∅'}</span><b>⇄</b><span>{node?.next?.value.title ?? '∅'}</span></div>
                     <div className="row-actions"><button onClick={() => reorder(track.id, -1)} disabled={index === 0} aria-label="Subir"><ArrowUp size={14} /></button><button onClick={() => reorder(track.id, 1)} disabled={index === tracks.length - 1} aria-label="Bajar"><ArrowDown size={14} /></button><button onClick={() => removeTrack(track.id)} aria-label="Eliminar"><Trash2 size={14} /></button></div>
                   </div>;

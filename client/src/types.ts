@@ -6,5 +6,7 @@ export interface Track {
   duration: number;
   cover: string;
   accent: string;
-  youtubeId: string;
+  youtubeId?: string;
+  localUrl?: string;
+  localKind?: 'audio' | 'video';
 }
